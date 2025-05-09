@@ -1,0 +1,4 @@
+# Don't add user data files to the repository!
+*.*
+!.gitignore
+!ba_codes.csv
