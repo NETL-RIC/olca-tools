@@ -12,6 +12,7 @@ import re
 
 import pandas as pd
 
+from electricitylci.utils import read_ba_codes
 from netlolca.NetlOlca import NetlOlca
 
 
@@ -95,14 +96,14 @@ interest are:
                 (BA inventory from primary fuel generation; no change)
 
 Version:
-    2.0.0
+    2.1.0
 Last Edited:
-    2025-01-21
+    2025-07-29
 """
 __all__ = [
-    'BA_MAP_CSV',
     'FUEL_COL_NAME',
     'GEN_COL_NAME',
+    'REG_COL_NAME',
     'USED_COL_NAME',
     'convert_primary_fuel',
     'get_fuel_dict',
@@ -125,8 +126,6 @@ REG_COL_NAME = "Subregion"
 '''str : Pandas data column for outlook mix region name.'''
 FUEL_COL_NAME = "FuelCategory"
 '''str : Pandas data column for outlook mix fuel name.'''
-BA_MAP_CSV = "ba_codes.csv"
-'''str : File name containing the balancing authority name to codes map.'''
 GEN_COL_NAME = "Gen_Ratio_new"
 '''str : Pandas data column for outlook mix generation ratio name.'''
 USED_COL_NAME = "Used"
@@ -157,6 +156,37 @@ def convert_primary_fuel(name):
         r_val = d.get(name, "")
 
     return r_val
+
+
+def find_new_process_id(n, name):
+    """Query the openLCA database for a process with a given name.
+
+    Parameters
+    ----------
+    n : NetlOlca
+        NetlOlca class instance connected to an openLCA database or JSON-LD.
+    name : str
+        Process name
+
+    Returns
+    -------
+    str, NoneType
+        The UUID for the matched process name (or None if not found).
+    """
+    # Helper function to get the new process UUID after a database update.
+    q = re.compile(name)
+    matches = n.match_process_names(q)
+    num_matches = len(matches)
+    if num_matches == 1:
+        logging.info("Found new process, '%s'" % name)
+        return matches[0][0]
+    elif num_matches == 0:
+        logging.error("Failed to find new process, '%s'!" % name)
+        return None
+    elif num_matches > 1:
+        logging.warning(
+            "Found %d matches for new process, '%s'!" % (num_matches, name))
+        return None
 
 
 def get_fuel_dict():
@@ -357,22 +387,15 @@ def make_ba_dict():
         are their associated short codes. Note that more than one name
         entry may map to the same short code.
     """
-    # Create CSV path and read CSV
-    csv_path = os.path.join("data", BA_MAP_CSV)
-    if not os.path.isfile(csv_path):
-        logging.error("Failed to find the input CSV, %s" % BA_MAP_CSV)
-        logging.info("Your runtime is in '%s'" % os.getcwd())
-
+    df = read_ba_codes()
     ba_dict = dict()
-    if os.path.isfile(csv_path):
-        df = pd.read_csv(csv_path)
 
-        # Iterate through all rows in the data frame, adding
-        # BA names as keys and BA codes as values to ba_dict
-        # WARNING: duplicate names in the CSV will take on the
-        #          last defined code.
-        for i in range(len(df)):
-            ba_dict[df.iloc[i,0]] = df.iloc[i,1]
+    # Iterate through all rows in the data frame, adding
+    # BA names as keys and BA codes as values to ba_dict
+    # WARNING: duplicate names in the CSV will take on the
+    #          last defined code.
+    for ba_code, row in df.iterrows():
+        ba_dict[row.BA_Name] = ba_code
 
     return ba_dict
 
@@ -445,8 +468,14 @@ def make_outlook_gen(netl, pid, ba, df, csv_name, ba_dict):
 
     Returns
     -------
-    str
-        The universally unique identifier for the new outlook mix process.
+    tuple
+        A tuple of length two.
+
+        -   str, the universally unique identifier for the new outlook mix
+            process
+        -   pandas.DataFrame, the data frame with new AEO mixes with updated
+            'Used' column (indicates if a fuel and subregion was found and
+            updated in the openLCA database).
 
     Notes
     -----
@@ -455,9 +484,18 @@ def make_outlook_gen(netl, pid, ba, df, csv_name, ba_dict):
     time this method is run. The description text has additional info on
     which of the four mix options was chosen for calculating outlook mixes.
     """
+    # Creates the new process with updated exchanges
     p_new, df = update_exchange_to_outlook(netl, pid, ba, df, csv_name, ba_dict)
-    netl.add(p_new)
-    return (p_new.id, df)
+    # Pushes the changes to the openLCA database/JSON-LD
+    is_okay = netl.add(p_new)
+    new_id = find_new_process_id(netl, p_new.name)
+
+    if not is_okay or new_id is None:
+        raise IOError(
+            "Failed to update the openLCA database with new process!"
+        )
+
+    return (new_id, df)
 
 
 def run(con, json_file, csv_dir, csv_name):
@@ -591,7 +629,7 @@ def update_exchange_to_outlook(netl, pid, ba, df, csv_name, ba_dict):
     except KeyError:
         # If a BA code is not found, this will be skipped
         ba_code = 'BA CODE NOT FOUND'
-        logging.warning('Balancing authority not found in BA Codes CSV.'
+        logging.warning('Balancing authority not found in BA Codes CSV. '
                         f'Add \"{ba}\" to BA Codes CSV with '
                         'corresponding BA code.')
 
