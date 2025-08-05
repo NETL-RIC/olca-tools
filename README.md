@@ -52,6 +52,9 @@ The CLI options are given below.
     -p P_FILE, --p_file P_FILE
         JSON-LD file (optional)
 
+### Finding Primary Fuel Categories
+The ElectricityLCI can categorize and filter facility-level generation data to its primary fuel.
+This use case examines how primary fuel categories change over time.
 
 ### Hawkins-Young Uncertainty Modeling
 In openLCA, emission factors may be accompanied with an uncertainty distribution.
