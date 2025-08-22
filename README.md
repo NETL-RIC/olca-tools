@@ -1,3 +1,5 @@
+[![DOI - 10.18141/2575065](https://img.shields.io/badge/DOI-10.18141%2F2575065-blue)](https://doi.org/10.18141/2575065)
+
 # olca-tools
 A series of Python modules and notebooks with tools and demonstrations for interacting with openLCA (version 2).
 
