@@ -69,7 +69,7 @@ import electricitylci.eia860_facilities as eia_860
 
 
 # FUNCTIONS
-def create_boiler_data_frame(year):
+def create_boiler_data_frame(year, percent_threshold=90):
     """Create a data frame with boiler-level fuel consumption and primary fuel data.
 
     Parameters
@@ -79,15 +79,10 @@ def create_boiler_data_frame(year):
 
     Returns
     -------
-    pandas.DataFrame
-        A data frame with the following columns:
-        - plant_id (int)
-        - boiler_id (str)
-        - total_fuel_consumption_mmbtu (float)
-        - FuelCategory (str)
-        - PrimaryFuel (str)
-        - primary_fuel_percent (float)
-        - YEAR (int)
+    tuple
+        A tuple containing two dataframes:
+        - boiler_data: The main boiler data with primary fuel information
+        - boiler_detailed: Detailed fuel consumption data for coal and gas
     """
     # Get boiler fuel consumption data
     boiler_fuel = eia_923.eia923_boiler_fuel(year)
@@ -96,12 +91,23 @@ def create_boiler_data_frame(year):
     boiler_design = eia_860.eia860_boiler_info_design(year)
 
     # Calculate monthly fuel consumption for each boiler
-    fuel_heating_value_monthly = [
-        "mmbtu_per_unit_january", "mmbtu_per_unit_february", "mmbtu_per_unit_march",
-        "mmbtu_per_unit_april", "mmbtu_per_unit_may", "mmbtu_per_unit_june",
-        "mmbtu_per_unit_july", "mmbtu_per_unit_august", "mmbtu_per_unit_september",
-        "mmbtu_per_unit_october", "mmbtu_per_unit_november", "mmbtu_per_unit_december"
-    ]
+    if year == 2013 or year == 2011:
+        # April is misspelled
+        fuel_heating_value_monthly = [
+            "mmbtu_per_unit_january", "mmbtu_per_unit_february", "mmbtu_per_unit_march",
+            "mmbtu_per_unit_apirl", "mmbtu_per_unit_may", "mmbtu_per_unit_june",
+            "mmbtu_per_unit_july", "mmbtu_per_unit_august", "mmbtu_per_unit_september",
+            "mmbtu_per_unit_october", "mmbtu_per_unit_november", "mmbtu_per_unit_december"
+        ]
+    else:
+        # The data is correct
+        fuel_heating_value_monthly = [
+            "mmbtu_per_unit_january", "mmbtu_per_unit_february", "mmbtu_per_unit_march",
+            "mmbtu_per_unit_april", "mmbtu_per_unit_may", "mmbtu_per_unit_june",
+            "mmbtu_per_unit_july", "mmbtu_per_unit_august", "mmbtu_per_unit_september",
+            "mmbtu_per_unit_october", "mmbtu_per_unit_november", "mmbtu_per_unit_december"
+        ]
+
     fuel_quantity_monthly = [
         "quantity_of_fuel_consumed_january", "quantity_of_fuel_consumed_february",
         "quantity_of_fuel_consumed_march", "quantity_of_fuel_consumed_april",
@@ -146,7 +152,10 @@ def create_boiler_data_frame(year):
     boiler_data['plant_id'] = boiler_data['plant_id'].astype('int')
     boiler_data['YEAR'] = boiler_data['YEAR'].astype('int')
 
-    return boiler_data
+    # Create detailed fuel consumption dataframe
+    boiler_detailed = create_detailed_fuel_consumption(boiler_fuel, boiler_design, year, percent_threshold)
+
+    return boiler_data, boiler_detailed
 
 
 def create_data_frame(year, method):
@@ -219,6 +228,137 @@ def create_data_frame(year, method):
     df['YEAR'] = df['YEAR'].astype('int')
 
     return df
+
+
+def create_detailed_fuel_consumption(boiler_fuel,
+                                     boiler_design,
+                                     year,
+                                     percent_threshold=90):
+    """
+    Create a detailed dataframe with coal and gas consumption for each boiler.
+
+    Parameters
+    ----------
+    boiler_fuel : pandas.DataFrame
+        Raw boiler fuel consumption data
+    boiler_design : pandas.DataFrame
+        Boiler design information
+    year : int
+        Year of the data
+    percent_threshold : float, optional
+        Minimum percentage threshold for coal or natural gas consumption.
+        Only rows where either coal or gas percentage >= this threshold are included.
+        Default is 90.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with detailed fuel consumption columns, aggregated by boiler-year
+    """
+    # Calculate monthly fuel consumption for each boiler
+    if year == 2013 or year == 2011:
+        # April is mispelled
+        fuel_heating_value_monthly = [
+            "mmbtu_per_unit_january", "mmbtu_per_unit_february", "mmbtu_per_unit_march",
+            "mmbtu_per_unit_apirl", "mmbtu_per_unit_may", "mmbtu_per_unit_june",
+            "mmbtu_per_unit_july", "mmbtu_per_unit_august", "mmbtu_per_unit_september",
+            "mmbtu_per_unit_october", "mmbtu_per_unit_november", "mmbtu_per_unit_december"
+        ]
+    else:
+        # The data is correct
+        fuel_heating_value_monthly = [
+            "mmbtu_per_unit_january", "mmbtu_per_unit_february", "mmbtu_per_unit_march",
+            "mmbtu_per_unit_april", "mmbtu_per_unit_may", "mmbtu_per_unit_june",
+            "mmbtu_per_unit_july", "mmbtu_per_unit_august", "mmbtu_per_unit_september",
+            "mmbtu_per_unit_october", "mmbtu_per_unit_november", "mmbtu_per_unit_december"
+        ]
+    fuel_quantity_monthly = [
+        "quantity_of_fuel_consumed_january", "quantity_of_fuel_consumed_february",
+        "quantity_of_fuel_consumed_march", "quantity_of_fuel_consumed_april",
+        "quantity_of_fuel_consumed_may", "quantity_of_fuel_consumed_june",
+        "quantity_of_fuel_consumed_july", "quantity_of_fuel_consumed_august",
+        "quantity_of_fuel_consumed_september", "quantity_of_fuel_consumed_october",
+        "quantity_of_fuel_consumed_november", "quantity_of_fuel_consumed_december"
+    ]
+
+    # Calculate total fuel consumption for each boiler-fuel type combination
+    boiler_fuel["total_fuel_consumption_mmbtu"] = (
+        np.multiply(
+            boiler_fuel[fuel_heating_value_monthly],
+            np.asarray(boiler_fuel[fuel_quantity_monthly])
+        )
+    ).sum(axis=1, skipna=True)
+
+    # Merge with boiler design information
+    boiler_detailed = boiler_fuel.merge(
+        boiler_design[["plant_id", "boiler_id", "firing_type_1"]],
+        on=["plant_id", "boiler_id"],
+        how="left"
+    )
+
+    # Add full_boiler_id column
+    boiler_detailed['full_boiler_id'] = boiler_detailed['boiler_id'] + '_' + boiler_detailed['plant_id'].astype(str)
+
+    # Group by boiler-year and aggregate fuel consumption
+    aggregated_data = []
+
+    for (full_boiler_id, plant_id, boiler_id), group in boiler_detailed.groupby(['full_boiler_id', 'plant_id', 'boiler_id']):
+        # Get plant name from the first row in the group
+        plant_name = group['plant_name'].iloc[0]
+        firing_type = group['firing_type_1'].iloc[0]
+
+        # Get reported prime mover from the first row in the group
+        # Note: reported_prime_mover should be the same for all rows in a boiler group
+        reported_prime_mover = group['reported_prime_mover'].iloc[0] if 'reported_prime_mover' in group.columns else 'Unknown'
+
+        # Calculate total energy consumption across all fuel types
+        total_energy = group['total_fuel_consumption_mmbtu'].sum()
+
+        # Calculate coal and gas consumption
+        coal_consumption = 0
+        gas_consumption = 0
+
+        for _, row in group.iterrows():
+            fuel_type = row['reported_fuel_type_code']
+            fuel_consumption = row['total_fuel_consumption_mmbtu']
+
+            # Categorize by fuel type
+            if fuel_type in ['BIT', 'SUB', 'LIG', 'RC', 'ANT', 'SGC', 'SC', 'WOC', 'WC']:
+                coal_consumption += fuel_consumption
+            elif fuel_type == 'NG':
+                gas_consumption += fuel_consumption
+
+        # Calculate percentages
+        coal_percent = (coal_consumption / total_energy * 100) if total_energy > 0 else 0
+        gas_percent = (gas_consumption / total_energy * 100) if total_energy > 0 else 0
+
+        aggregated_data.append({
+            'full_boiler_id': full_boiler_id,
+            'plant_name': plant_name,
+            'plant_id': plant_id,
+            'boiler_id': boiler_id,
+            'firing_type_1': firing_type,
+            'reported_prime_mover': reported_prime_mover,
+            'total_fuel_consumption_mmbtu': total_energy,
+            'Total_Coal_Consumption_MMBtu': coal_consumption,
+            'Total_Natural_Gas_Consumption_MMBtu': gas_consumption,
+            'Percent_Coal': round(coal_percent, 2),
+            'Percent_Natural_Gas': round(gas_percent, 2),
+            'Year': year
+        })
+
+    # Create aggregated dataframe
+    boiler_detailed_agg = pd.DataFrame(aggregated_data)
+
+    # Filter for positive fuel consumption
+    positive_mask = boiler_detailed_agg["total_fuel_consumption_mmbtu"] > 0
+    boiler_detailed_agg = boiler_detailed_agg.loc[positive_mask, :]
+
+    # Filter for percent threshold - only include rows where either coal or gas percentage >= threshold
+    threshold_mask = (boiler_detailed_agg['Percent_Coal'] >= percent_threshold) | (boiler_detailed_agg['Percent_Natural_Gas'] >= percent_threshold)
+    boiler_detailed_agg = boiler_detailed_agg.loc[threshold_mask, :]
+
+    return boiler_detailed_agg
 
 
 def determine_boiler_primary_fuel(boiler_data):
@@ -409,14 +549,20 @@ def run_boilers():
     years = [x for x in range(2011, 2023)]
 
     df = None
+    detailed_df = None
     for year in years:
         log.info(f"Processing year {year}")
         try:
-            temp = create_boiler_data_frame(year)
+            temp, temp_detailed = create_boiler_data_frame(year, percent_threshold=0)
             if df is None and temp is not None:
                 df = temp.copy()
             elif df is not None and temp is not None:
                 df = pd.concat([df, temp], ignore_index=True)
+
+            if detailed_df is None and temp_detailed is not None:
+                detailed_df = temp_detailed.copy()
+            elif detailed_df is not None and temp_detailed is not None:
+                detailed_df = pd.concat([detailed_df, temp_detailed], ignore_index=True)
         except Exception as e:
             log.error(f"Error processing year {year}: {e}")
             continue
@@ -445,6 +591,28 @@ def run_boilers():
     if not swap_df.empty:
         swap_df.to_csv("boiler_coal-to-ng.csv")
         log.info(f"Found {len(swap_df)} boilers that switched from COAL to GAS")
+
+        # Filter detailed_df to only include switching boilers
+        switching_boiler_ids = swap_df.index.tolist()
+        detailed_switching = detailed_df[detailed_df['full_boiler_id'].isin(switching_boiler_ids)].copy()
+
+        # Sort by full_boiler_id and year (alphabetical order for boiler IDs, then chronological)
+        detailed_switching = detailed_switching.sort_values(['plant_id', 'boiler_id', 'Year'])
+
+        # Create clean output with only the requested columns
+        clean_output = detailed_switching[['plant_id', 'boiler_id', 'plant_name', 'Year', 'total_fuel_consumption_mmbtu',
+                                         'Total_Coal_Consumption_MMBtu', 'Total_Natural_Gas_Consumption_MMBtu',
+                                         'Percent_Coal', 'Percent_Natural_Gas', 'reported_prime_mover']].copy()
+
+        # Rename columns to match requested format
+        clean_output.columns = ['Plant_ID', 'Boiler_ID', 'Plant_Name', 'Year', 'Total_Energy_Consumption_MMBtu',
+                               'Total_Coal_Consumption_MMBtu', 'Total_Natural_Gas_Consumption_MMBtu',
+                               'Percent_Coal', 'Percent_Natural_Gas', 'Reported_Prime_Mover']
+
+        # Export the clean detailed switching boilers data
+        clean_output.to_csv("boiler_coal_to_gas_detailed.csv", index=False)
+        log.info(f"Created detailed boiler-year CSV with {len(clean_output)} rows")
+
     else:
         log.info("No boilers found that switched from COAL to GAS")
 
