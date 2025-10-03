@@ -1,4 +1,6 @@
 # Ignore the common stuff
 .DS_Store
 .vscode
+.ipynb_checkpoints/
 __pycache__/
+_hidden/
