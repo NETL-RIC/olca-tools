@@ -23,6 +23,8 @@ See descriptions of each below.
 
 
 ### ElectricityLCI Comparative Analysis
+elci_analysis.py
+
 The Python package, ElectricityLCI, produces JSON-LD ZIP files for various runs of the electricity baseline.
 The subtle differences between model runs can be analyzed using the elci_analysis.py module in this repository.
 
@@ -30,7 +32,21 @@ Add the JSON-LD files to the data folder, create a dictionary that points to eac
 See the 'Examples' section in the modules documentation.
 
 
+### EPA CAMPD Analysis
+campd_analyzer.py
+
+The ElectricityLCI Python package (https://github.com/NETL-RIC/ElectricityLCI) includes a method called `archive_epa_cams` (found in utils.py; check 'development' branch, if not found in 'master'), which creates CSV files of state-level daily and hourly facility-level emissions data for a given year.
+For each state and each year, the API is queried monthly, and all months are accumulated into a single annual CSV file for a given state.
+The CSV file may contain missing months (e.g., due to a dropped API call).
+
+The `run` method in campd_analyzer.py reads the CSV files to find data gaps (i.e., missing months within the time series), and counts the total lines read across all CSV files.
+
+Work is in progress on developing a method to gap fill the time series, based on subsequent runs of the API and merging data together.
+
+
 ### Energy Outlook
+energy_outlook.py
+
 The Python package, scenario-modeler, has a utility for generating electricity forecast mixes based on the EIA's Annual Energy Outlook.
 The outputs are CSV files with primary fuel mixes for each balancing authority area.
 
@@ -54,11 +70,17 @@ The CLI options are given below.
     -p P_FILE, --p_file P_FILE
         JSON-LD file (optional)
 
+
 ### Finding Primary Fuel Categories
+primary_fuel_finder.py
+
 The ElectricityLCI can categorize and filter facility-level generation data to its primary fuel.
 This use case examines how primary fuel categories change over time.
 
+
 ### Hawkins-Young Uncertainty Modeling
+hawkins_young.py
+
 In openLCA, emission factors may be accompanied with an uncertainty distribution.
 Where uncertainty is difficulty to measure, the Hawkins-Young method provides a modeling procedure to create a log-normal distribution centered around an emission factor, suitable for Monte-Carlo simulation.
 
@@ -67,10 +89,43 @@ The development of these methods are presented in hawkins_young.py.
 
 
 ### Residual Electricity Generation Grid Mixes
-The Python package, elci-to-rem, converts static generation mixes found in the electricity baseline to a residual mix by removing the generation amounts that were used in renewable electricity certificate sales.
+elci_to_rem.py
+
+The Python module, elci_to_rem.py, converts static generation mixes found in the electricity baseline to a residual mix by removing the generation amounts that were used in renewable electricity certificate sales.
 The outputs are CSV files with primary fuel mixes for each balancing authority area.
 
-The residual_grid_mix.py module in this repository provides the methods to either connect to an openLCA database (using the IPC server) or an exported JSON-LD zip file, find the electricity generation mix processes, and create new processes based on the residual mixes found in the CSV files (produced by elci_to_rem, as noted above).
+The basic workflow is given by:
+
+1.  Read NREL REC data (by state)
+
+    -   https://www.nrel.gov/analysis/assets/docs/nrel-green-power-data-v2023.xlsx
+
+1.  Aggregate state RECs to their BA
+
+    -   Requires crosswalk/map from state to BA
+
+        *   Areal weighting
+        *   Facility count weighting
+        *   Others (e.g., facility-generation)
+
+1.  Calculate residual mix for each BA
+
+    -   Take total generation of renewables from each BA (MWh)
+    -   Subtract REC generation from total generation of renewables
+    -   Recalculate mix percentages (assuming the relative percentages of each renewable energy technology remains the same---does not capture actual wind/solar/hydro sales)
+    -   Print new residual mix at BA level and national level
+
+The CSV files created are used in conjunction with the residual_grid_mix.py module.
+
+To create a CSV of 2016 residual grid mix amounts using the facility-count aggregation method and zeroing excess grid generation, run the following on the command line:
+
+```bash
+$ python elci_to_rem.py -a "count" -r "zero" -y 2016 -s
+```
+
+residual_grid_mix.py
+
+The residual_grid_mix.py module provides the methods to either connect to an openLCA database (using the IPC server) or an exported JSON-LD zip file, find the electricity generation mix processes, and create new processes based on the residual mixes found in the CSV files (produced by elci_to_rem, as noted above).
 These methods are provided as a command-line interface tool.
 
 The CSV files from elci_to_rem are assumed located in the 'data' directory (or may be defined using the `-r` flag).
