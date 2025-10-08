@@ -9,6 +9,7 @@
 import logging
 import os
 import re
+import uuid
 
 import pandas as pd
 
@@ -299,6 +300,9 @@ def get_new_process(n, pid, d_txt="", at_grid=True, is_gen=True):
         p_dict['@id'] = None
         p_dict['lastChange'] = None
         p_dict['name'] = make_residual_process_name(p.name, at_grid, is_gen)
+        # Assign a consistent UUID based on name
+        # TODO: also account for year? check what's done in eLCI
+        p_dict['@id'] = str(uuid.uuid3(uuid.NAMESPACE_OID, p_dict['name']))
         # TODO: Consider updating the Process documentation
         # p_dict['processDocumentation']['validFrom'] = '2020-01-01'
         # p_dict['processDocumentation']['validUntil'] = '2020-12-31'
