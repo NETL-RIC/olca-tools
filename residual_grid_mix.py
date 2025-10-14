@@ -6,6 +6,7 @@
 ##############################################################################
 # REQUIRED MODULES
 ##############################################################################
+import datetime
 import logging
 import os
 import re
@@ -298,7 +299,8 @@ def get_new_process(n, pid, d_txt="", at_grid=True, is_gen=True):
 
         # Reset UUID and last edited date (updated by olca-schema class)
         p_dict['@id'] = None
-        p_dict['lastChange'] = None
+        p_dict['lastChange'] = datetime.datetime.now().isoformat() + 'Z'
+        p_dict['processDocumentation']['creationDate'] = datetime.datetime.now().isoformat(timespec='seconds')
         p_dict['name'] = make_residual_process_name(p.name, at_grid, is_gen)
         # Assign a consistent UUID based on name
         # TODO: also account for year? check what's done in eLCI
