@@ -523,8 +523,8 @@ def query_epa_cams(year,
             period, year, month, state.lower()
         )
         write_csv_to_output(archive_file, df)
-    else:
-        print("Failed to write, %s" % archive_file)
+    elif to_save:
+        print("Failed to write to CSV!")
 
     return df
 
