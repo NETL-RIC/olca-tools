@@ -10,6 +10,7 @@ import datetime
 import glob
 import os
 import re
+import time
 
 import numpy as np
 import pandas as pd
@@ -29,25 +30,30 @@ each month has data (``archive_epa_cams`` queries the EPA API for each
 month in a given year; therefore, a failed request may result in missing
 data for a single month).
 
-TODO:
+The :func:`query_epa_cams` method is a derivative of ElectricityLCI's
+:func:`archive_epa_cams` method, but allows the user to query a single
+month for a single state in an effort to gap fill months.
 
--   There may be an instance of running :func:`archive_epa_cams` multiple times
-    in an attempt to create a complete time series (e.g., months Jan. and Feb.
-    were unsuccessful in the first API call and months Sep. and Dec. failed
-    to return data in a second API call). It may be possible to merge these
-    two datasets together. The function, :func:`find_duplicate_archives` was
-    created to identify pairs of CSV files (an original and a duplicate) based
-    on a user's naming scheme (e.g., by adding 'ABCD' to one of the CSV's file
-    name). The goal is create a method that finds all duplicated pairs, reads
-    both, merges their content, drops duplicates, sorts by date, and writes
-    back to CSV in an attempt to create complete CSV files that will not trip
-    the :func:`run` method.
+There may be an instance of running :func:`archive_epa_cams` multiple times
+in an attempt to create a complete time series (e.g., months Jan. and Feb.
+were unsuccessful in the first API call and months Sep. and Dec. failed
+to return data in a second API call).
+
+It may be possible to merge these two datasets together.
+The function, :func:`find_duplicate_archives` was created to identify pairs of
+CSV files (an original and a duplicate) based on a user's naming scheme
+(e.g., by adding 'ABCD' to one of the CSV's file name).
+
+The :func:`fix` method finds all duplicated pairs, reads both, merges their
+content, drops duplicates, sorts by date, and writes back to CSV in an attempt
+to create complete CSV files that will not trip the :func:`run` method in
+subsequent runs.
 
 Author:
     Tyler W. Davis
 
 Last updated:
-    2025-10-07
+    2025-10-24
 """
 
 
@@ -317,6 +323,210 @@ def fix(data_dir, dup_str):
         # original file name.
         print("Overwriting %s" % dup_file)
         orig_df.to_csv(dup_file, index=False)
+
+
+# NEW
+def query_epa_cams(year,
+                     month,
+                     state,
+                     api_key="",
+                     period="daily",
+                     to_save=False,
+                     time_out=60,
+                     api_wait=3.6):
+    """Helper function to archive EPA's daily and hourly CEMS data for a given
+    state, month, and year.
+
+    Parameters
+    ----------
+    year : int
+        The year to process (e.g., 2022).
+    month : int
+        The month to process (e.g., 1 for January).
+    state : str
+        The two-character state abbreviation (e.g., 'PA' for Pennsylvania).
+    api_key : str, optional
+        Your personal EPA CAMPD API key (prompt for input if not provided), by default ""
+    period : str, optional
+        One of three time periods to archive (options include: 'annual', 'daily' and 'hourly'), by default "daily"
+    to_save : bool, optional
+        Whether to write the data frame to CSV in eLCI output directory.
+        Defaults to false.
+    time_out : int, optional
+        The timeout (in seconds) to wait for an API response.
+        API may take longer to respond for 'hourly' than for 'annual' requests.
+    api_wait : float, optional
+        The sleep time (in seconds) to wait in-between API calls as a courtesy
+        to EPA's servers. Defaults to 3.6 s.
+
+    Returns
+    -------
+    pandas.DataFrame
+
+    Raises
+    ------
+    ValueError
+        If the time period or state provided is not one of the valid options
+
+    Notes
+    -----
+    Heavily derived from :func:`archive_epa_cams` in ElectricityLCI's utils.py.
+    The purpose of this method is to gap-fill single months for a given state.
+
+    Test the API out `here <https://campd.epa.gov/data/custom-data-download>`_
+    """
+    # Needs these globals and utilities
+    from electricitylci.cems_data import CEMS_STATES
+    from electricitylci.globals import CAM_API_URL
+    from electricitylci.utils import check_api
+    from electricitylci.utils import next_month
+    from electricitylci.utils import read_from_api
+    from electricitylci.utils import write_csv_to_output
+
+    # API max retries parameter
+    max_tries = 4
+
+    # Check that the user provided a valid API key
+    cam_api = "https://www.epa.gov/power-sector/cam-api-portal#/api-key-signup"
+    api_key = check_api(api_key, "EPA", cam_api)
+
+    # Check that the user selects a valid period
+    valid_cams_periods = ['hourly', 'daily']
+    if period not in valid_cams_periods:
+        warn_msg = (
+            "Expected, '%s', received '%s'" % (
+                ", ".join(valid_cams_periods), period
+            )
+        )
+        raise ValueError(warn_msg)
+
+    if state not in CEMS_STATES:
+        raise ValueError("The state, '%s', is not valid!" % state)
+
+    # Column naming scheme to be consistent across datasets.
+    c_map = {
+        'stateCode': 'state',
+        'facilityName': 'facility_name',
+        'facilityId': 'plant_id_eia',
+        'year': 'year',
+        'grossLoad': 'gross_load_mwh',
+        'steamLoad': 'steam_load_1000_lbs',
+        'so2Mass': 'so2_mass_tons',
+        'co2Mass': 'co2_mass_tons',
+        'noxMass': 'nox_mass_tons',
+        'heatInput': 'heat_content_mmbtu'
+    }
+    # Columns to check for data (row dropped if all entries are NaN)
+    data_cols = [
+        'gross_load_mwh',
+        'steam_load_1000_lbs',
+        'so2_mass_tons',
+        'co2_mass_tons',
+        'nox_mass_tons',
+        'heat_content_mmbtu',
+    ]
+
+    # Create the new API URL
+    cam_url = CAM_API_URL.replace("/annual/", f"/{period}/")
+
+    # Run for one month
+    start_date = datetime.date(year, month, 1)
+    end_date = next_month(start_date) - datetime.timedelta(days=1)
+
+    # Prepare the empty data frame
+    df = pd.DataFrame(columns=list(c_map.values()))
+
+    # Initialize variables to start the API query for all records.
+    recs_received = 0
+    recs_total = 2 # needs to >1 to initiate the loop
+    page_no = 1
+    while recs_received < (recs_total - 1):
+        # Build the params; the page number will increment
+        params = {
+            'api_key': api_key,
+            'beginDate': start_date.isoformat(),
+            'endDate': end_date.isoformat(),
+            'stateCode': state,
+            'page': page_no,
+            'perPage': 500,  # max allowable by API is 500
+        }
+
+        # Query the API; url_tries will max with no data upon failing
+        try:
+            js_list, url_tries, h_dict = read_from_api(
+                cam_url,
+                params=params,
+                max_tries=max_tries,
+                time_out=time_out
+            )
+        except Exception as e:
+            # Hitting urllib3 and requests errors; just kill this state
+            js_list = []  # add zero to recs received
+            h_dict = {}   # set total recs to zero
+            url_tries = max_tries # set success to false
+
+        # EPA's rate limit is 1000 requests per hour.
+        # This limits you to 3.6 seconds per request to avoid exceeding.
+        # The API may recommend a different wait time.
+        # Daily data has roughly 12k records per state; with 49 states,
+        # that's ~600k records; that's 1200 requests, which is more than
+        # the 1000 per hour rate limit, so let's impose the 3.6s wait,
+        # unless otherwise specified
+        sleep_time = h_dict.get("Retry-After", api_wait)
+        sleep_time = float(sleep_time)
+        time.sleep(sleep_time)
+
+        # update the total records and received records
+        recs_total = h_dict.get('X-Total-Count', 0)
+        recs_total = int(recs_total)
+        recs_received += len(js_list)
+
+        tmp_df = pd.DataFrame.from_dict(js_list).rename(columns=c_map)
+
+        # HOTFIX: it may be valid for a month to have no data.
+        # only skip if API fails
+        # If no data or API failed, stop the query (incomplete data)
+        if len(tmp_df) == 0 and url_tries < max_tries:
+            print("No data for this query (page=%d)!" % page_no)
+        elif len(tmp_df) == 0 and url_tries >= max_tries:
+            print("Failed to retrieve data for %s %s (page=%d)!" % (
+                state, year, page_no)
+            )
+        elif len(df) == 0 and len(tmp_df) > 0:
+            # First time, set df
+            df = tmp_df.copy()
+        else:
+            # We've been here before. We're going in circles, Sam!
+            # NOTE: columns with all NaNs will raise a FutureWarning
+            df = pd.concat([df, tmp_df], ignore_index=True)
+
+        # Communicate where we are.
+        print(
+            "Received %d out of %d records (page=%d)" % (
+                recs_received, recs_total, page_no
+            )
+        )
+
+        # Increment page to continue
+        page_no += 1
+
+    # NOTE: decision here is to save only the rows that have data.
+    # Rows with NaN values in all data columns are dropped.
+    # If you favor a more complete time series (with data gaps), then
+    # comment this line out.
+    df = df.dropna(subset=data_cols, how='all')
+
+    # Write to electricitylci's output folder.
+    if len(df) > 0 and to_save:
+        # Define the state-level CEMS data file
+        archive_file = "epacems_%s_%d-%02d_%s.csv" % (
+            period, year, month, state.lower()
+        )
+        write_csv_to_output(archive_file, df)
+    else:
+        print("Failed to write, %s" % archive_file)
+
+    return df
 
 
 def run(data_dir, year=None, freq=None):
