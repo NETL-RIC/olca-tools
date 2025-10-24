@@ -116,7 +116,7 @@ References
 
 1.  E. O'Shaughnessy, S. Jena, and D. Salyer. 2024. Status and Trends in the
     Voluntary Market (2023 Data). Golden, CO: NREL. Online:
-    https://www.nrel.gov/analysis/assets/docs/nrel-green-power-data-v2023.xlsx
+    https://www.nrel.gov/docs/libraries/analysis/nrel-green-power-data-v2023.xlsx
 
 
 Examples:
@@ -697,7 +697,7 @@ def get_rec(year, rec_path=None, to_save=False):
     if rec_path is None:
         rec_url = (
             "https://www.nrel.gov/"
-            "analysis/assets/docs/nrel-green-power-data-v2023.xlsx")
+            "docs/libraries/analysis/nrel-green-power-data-v2023.xlsx")
         # About File: ADDS a column, B, that includes the year! from 2016—> 2023 while prev only had 2020
         rec_name = os.path.basename(rec_url)
         rec_path = os.path.join(DATA_DIR, rec_name)

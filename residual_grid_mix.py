@@ -734,7 +734,7 @@ def update_exchange_to_residual(netl, pid, ba, data_dir, m, y):
     logging.debug("Reading residual mix data from file")
     df = get_residual_mix(m, y, data_dir)
     p_desc = (
-        "Electricity generation mixes updated to reflect 2020 residual grid "
+        f"Electricity generation mixes updated to reflect {y} residual grid "
         "mix based on NREL's Status and Trends in the Voluntary Market "
         "(https://www.nrel.gov/analysis/green-power.html). ")
     p_desc += get_residual_mix_description(m)
