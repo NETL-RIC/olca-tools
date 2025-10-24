@@ -6,9 +6,11 @@
 ##############################################################################
 # REQUIRED MODULES
 ##############################################################################
+import datetime
 import logging
 import os
 import re
+import uuid
 
 import pandas as pd
 
@@ -297,8 +299,12 @@ def get_new_process(n, pid, d_txt="", at_grid=True, is_gen=True):
 
         # Reset UUID and last edited date (updated by olca-schema class)
         p_dict['@id'] = None
-        p_dict['lastChange'] = None
+        p_dict['lastChange'] = datetime.datetime.now().isoformat() + 'Z'
+        p_dict['processDocumentation']['creationDate'] = datetime.datetime.now().isoformat(timespec='seconds')
         p_dict['name'] = make_residual_process_name(p.name, at_grid, is_gen)
+        # Assign a consistent UUID based on name
+        # TODO: also account for year? check what's done in eLCI
+        p_dict['@id'] = str(uuid.uuid3(uuid.NAMESPACE_OID, p_dict['name']))
         # TODO: Consider updating the Process documentation
         # p_dict['processDocumentation']['validFrom'] = '2020-01-01'
         # p_dict['processDocumentation']['validUntil'] = '2020-12-31'
@@ -343,9 +349,9 @@ def make_residual_gen(netl, pid, ba, data_dir, m, y):
 
     Notes
     -----
-    WARNING: this can and will create multiple versions of the
-    'Electricity; at grid; residual generation mix' process---one for each
-    time this method is run. The description text has additional info on
+    WARNING: this will replace any existing 'Electricity; at grid; residual 
+    generation mix' process--- as the UUID is based on the process name.
+    The description text has additional info on
     which of the four mix options was chosen for calculating residual mixes.
     """
     p_new = update_exchange_to_residual(netl, pid, ba, data_dir, m, y)
@@ -356,7 +362,8 @@ def make_residual_gen(netl, pid, ba, data_dir, m, y):
 def run(con, json_file, csv_dir, mix_opt, gen_yr):
     """The main run method.
 
-    Connects to openLCA project, finds 'Electricity; at grid; generation mix' processes, replaces the generation mix with the residual grid mix data
+    Connects to openLCA project, finds 'Electricity; at grid; generation mix' processes,
+    replaces the generation mix with the residual grid mix data
     (based on the mix_opt and gen_yr parameters), adds the new residual
     generation mix process to the project, and creates new 'Electricity; at
     grid, consumption residual mix' processes by updating the original
@@ -405,9 +412,20 @@ def run(con, json_file, csv_dir, mix_opt, gen_yr):
     q1 = re.compile("^Electricity; at grid; consumption mix - US - US$")
     q2 = re.compile("^Electricity; at grid; consumption mix - .* - FERC$")
     q3 = re.compile("^Electricity; at grid; consumption mix - .* - BA$")
-    update_providers(netl, q1, ba_ids)
-    update_providers(netl, q2, ba_ids)
-    update_providers(netl, q3, ba_ids)
+    # build dictionary of original to new process UIDs as we go
+    consum_ids = {}
+    consum_ids = consum_ids | update_providers(netl, q1, ba_ids)
+    consum_ids = consum_ids | update_providers(netl, q2, ba_ids)
+    consum_ids = consum_ids | update_providers(netl, q3, ba_ids)
+
+    # Create the consumption residual mixes at user, linking them to their new
+    # residual consumption mix processes.
+    q1 = re.compile("^Electricity; at user; consumption mix - US - US$")
+    q2 = re.compile("^Electricity; at user; consumption mix - .* - FERC$")
+    q3 = re.compile("^Electricity; at user; consumption mix - .* - BA$")
+    update_providers(netl, q1, consum_ids, at_grid=False)
+    update_providers(netl, q2, consum_ids, at_grid=False)
+    update_providers(netl, q3, consum_ids, at_grid=False)
 
     # Gracefully close established connections
     logging.info("Disconnecting from project.")
@@ -417,7 +435,7 @@ def run(con, json_file, csv_dir, mix_opt, gen_yr):
         netl.close()
 
 
-def update_providers(netl, q, b_dict):
+def update_providers(netl, q, b_dict, at_grid=True):
     """Iterates over processes, updates their default providers based on a
     look-up dictionary of UUIDs, and adds the new 'residual' process to the
     open project.
@@ -446,7 +464,10 @@ def update_providers(netl, q, b_dict):
         A dictionary where keys are process UUIDs associated with Electricity
         at grid; generation mixes at the Balancing Authority level and keys
         are the process UUIDs for their residual mix counterpart.
+    at_grid : bool, optional
+        Whether process is "at grid"; otherwise, "at user"; defaults to true.
     """
+    consum_ids = {}
     r = netl.match_process_names(q)
     for m in r:
         try:
@@ -454,7 +475,7 @@ def update_providers(netl, q, b_dict):
             # (based on the ba_ids created above), update default provider.
             uid, name = m
             d_str = "Default providers updated to residual generation mix."
-            p_new = get_new_process(netl, uid, d_txt=d_str, is_gen=False)
+            p_new = get_new_process(netl, uid, d_txt=d_str, at_grid=at_grid, is_gen=False)
             n_ex = len(p_new.exchanges)
             logging.info("Updating %d exchanges for '%s'" % (n_ex, name))
             for i in range(n_ex):
@@ -478,6 +499,8 @@ def update_providers(netl, q, b_dict):
         else:
             # Add p_new to project
             netl.add(p_new)
+            consum_ids[uid] = p_new.id
+    return consum_ids
 
 
 def test(con, json_file, csv_dir, mix_opt, gen_yr):
